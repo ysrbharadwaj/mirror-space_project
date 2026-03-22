@@ -126,7 +126,7 @@ class DiffFrameEncoder:
     def _apply_motion_compensation(self, frame: np.ndarray, motion_grid: np.ndarray) -> np.ndarray:
         """Predict current frame using motion vectors"""
         h, w = frame.shape[:2]
-        predicted = np.zeros_like(self.previous_frame)
+        predicted = self.previous_frame.copy()
         
         # Warp previous frame using motion vectors
         for by in range(motion_grid.shape[0]):
@@ -142,17 +142,41 @@ class DiffFrameEncoder:
                 x_start = bx * self.block_size
                 x_end = min(x_start + self.block_size, w)
                 
-                # Source region in previous frame
-                src_y = int(y_start + dy)
-                src_x = int(x_start + dx)
-                
-                # Clamp to frame bounds
-                src_y_end = min(src_y + (y_end - y_start), h)
-                src_x_end = min(src_x + (x_end - x_start), w)
-                
-                if src_y >= 0 and src_x >= 0 and src_y_end <= h and src_x_end <= w:
-                    predicted[y_start:y_end, x_start:x_end] = \
-                        self.previous_frame[src_y:src_y_end, src_x:src_x_end]
+                # Source region in previous frame (shifted by motion)
+                shift_x = int(round(dx))
+                shift_y = int(round(dy))
+
+                src_x0 = x_start + shift_x
+                src_y0 = y_start + shift_y
+                src_x1 = x_end + shift_x
+                src_y1 = y_end + shift_y
+
+                dst_x0 = x_start
+                dst_y0 = y_start
+                dst_x1 = x_end
+                dst_y1 = y_end
+
+                # Clip left/top by moving both source and destination starts.
+                if src_x0 < 0:
+                    dst_x0 -= src_x0
+                    src_x0 = 0
+                if src_y0 < 0:
+                    dst_y0 -= src_y0
+                    src_y0 = 0
+
+                # Clip right/bottom by shrinking both source and destination ends.
+                if src_x1 > w:
+                    overflow = src_x1 - w
+                    dst_x1 -= overflow
+                    src_x1 = w
+                if src_y1 > h:
+                    overflow = src_y1 - h
+                    dst_y1 -= overflow
+                    src_y1 = h
+
+                # Apply only valid overlapping region.
+                if dst_x0 < dst_x1 and dst_y0 < dst_y1:
+                    predicted[dst_y0:dst_y1, dst_x0:dst_x1] = self.previous_frame[src_y0:src_y1, src_x0:src_x1]
         
         return predicted
     
@@ -212,6 +236,7 @@ class DiffFrameEncoder:
         
         return header + bytes(residual_data)
 
+    def _encode_full_frame(
         self,
         frame: np.ndarray,
         frame_number: int,
